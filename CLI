@@ -1,0 +1,282 @@
+import numpy as np
+from skopt import Optimizer
+from skopt.space import Real
+from skopt.learning import GaussianProcessRegressor, RandomForestRegressor, ExtraTreesRegressor
+import warnings
+
+# Suppress scikit-optimize warnings that might clutter the CLI
+warnings.filterwarnings("ignore", category=UserWarning)
+
+def get_valid_input(prompt, type_func, validation_func=None, error_message="Invalid input. Please try again."):
+    """Helper function to get validated input from the user."""
+    while True:
+        try:
+            value = type_func(input(prompt))
+            if validation_func and not validation_func(value):
+                print(error_message)
+                continue
+            return value
+        except ValueError:
+            print(error_message)
+
+def define_parameters():
+    """Asks the user to define input parameters (name, type, bounds/categories)."""
+    print("\n--- Define Your Reaction Parameters ---")
+    num_params = get_valid_input(
+        "How many input parameters will you be optimizing? (e.g., Temperature, Concentration): ",
+        int,
+        lambda x: x > 0,
+        "Please enter a positive integer for the number of parameters."
+    )
+
+    dimensions = []
+    param_names = []
+
+    for i in range(num_params):
+        print(f"\nParameter {i + 1}:")
+        name = get_valid_input(f"Enter name for parameter {i + 1}: ", str).strip()
+        while name in param_names:
+            print("Parameter name already exists. Please enter a unique name.")
+            name = get_valid_input(f"Enter name for parameter {i + 1}: ", str).strip()
+
+        param_names.append(name)
+
+        # Only 'continuous' type is supported now
+        print(f"Parameter '{name}' will be treated as continuous.")
+        low = get_valid_input(f"Enter minimum value for '{name}': ", float)
+        high = get_valid_input(f"Enter maximum value for '{name}': ", float)
+        while low >= high:
+            print("Minimum value must be less than maximum value.")
+            low = get_valid_input(f"Enter minimum value for '{name}': ", float)
+            high = get_valid_input(f"Enter maximum value for '{name}': ", float)
+        dimensions.append(Real(low, high, name=name))
+
+    return dimensions, param_names, []
+
+def define_objective():
+    """Asks the user to define the objective to optimize (name, maximize/minimize)."""
+    print("\n--- Define Your Optimization Objective ---")
+    objective_name = get_valid_input(
+        "What is the name of the value you want to optimize? (e.g., Yield, Purity, Conversion): ",
+        str
+    ).strip()
+
+    optimization_type = get_valid_input(
+        f"Do you want to maximize or minimize '{objective_name}'? (max/min): ",
+        str,
+        lambda x: x.lower() in ['max', 'min'],
+        "Invalid choice. Please enter 'max' or 'min'."
+    ).lower()
+
+    return objective_name, optimization_type == 'max' # True for maximize, False for minimize
+
+def get_initial_experiments(param_names, objective_name, dimensions_global):
+    """Collects initial experimental data from the user."""
+    print("\n--- Enter Your Initial Experimental Data ---")
+    num_experiments = get_valid_input(
+        "How many experiments have you already performed? ",
+        int,
+        lambda x: x >= 0, # Allow 0 initial experiments, skopt will use random starts
+        "Please enter a non-negative integer."
+    )
+
+    if num_experiments == 0:
+        print("Starting without initial experimental data. The first few suggestions will be exploratory.")
+        return [], []
+
+    X_initial = [] # Input parameters for each experiment
+    y_initial = [] # Objective value for each experiment
+
+    for i in range(num_experiments):
+        print(f"\nExperiment {i + 1}:")
+        current_x = []
+        for j, param_name in enumerate(param_names):
+            value = get_valid_input(f"  Enter value for '{param_name}': ", float)
+            current_x.append(value)
+
+        X_initial.append(current_x)
+
+        objective_value = get_valid_input(f"  Enter measured value for '{objective_name}': ", float)
+        y_initial.append(objective_value)
+
+    return X_initial, y_initial
+
+def select_model_and_acquisition():
+    """Allows the user to select the surrogate model and acquisition function."""
+    print("\n--- Configure Bayesian Optimization Model ---")
+
+    # Select Surrogate Model
+    model_choices = {'gp': GaussianProcessRegressor(), 'rf': RandomForestRegressor(n_estimators=100), 'et': ExtraTreesRegressor(n_estimators=100)}
+    model_name = get_valid_input(
+        "Choose a surrogate model (GP - Gaussian Process, RF - Random Forest, ET - Extra Trees): ",
+        str,
+        lambda x: x.lower() in ['gp', 'rf', 'et'],
+        "Invalid model choice. Please enter 'GP', 'RF', or 'ET'."
+    ).lower()
+    base_estimator = model_choices[model_name]
+
+    # Select Acquisition Function
+    acq_func_choices = {
+        'ei': 'EI',          # Standard string alias
+        'pi': 'PI',          # Standard string alias
+        'lcb': 'LCB',        # Standard string alias
+        'gp_hedge': 'gp_hedge' # Corrected to lowercase 'gp_hedge'
+    }
+    acq_func_name = get_valid_input(
+        "Choose an acquisition function (EI - Expected Improvement, PI - Probability of Improvement, LCB - Lower Confidence Bound, gp_hedge): ",
+        str,
+        lambda x: x.lower() in acq_func_choices,
+        "Invalid acquisition function choice. Please enter 'EI', 'PI', 'LCB', or 'gp_hedge'."
+    ).lower()
+    
+    # Get the actual acq_func string for skopt
+    acq_func = acq_func_choices[acq_func_name]
+
+    return base_estimator, acq_func
+
+# ...existing code...
+
+# ...existing code...
+
+def main():
+    # 1. Define Parameters
+    dimensions, param_names, _ = define_parameters() 
+
+    # 2. Define Objective
+    objective_name, maximize_objective = define_objective()
+    if maximize_objective:
+        print(f"Note: Since you want to maximize '{objective_name}', the values will be internally negated for minimization by the optimizer.")
+
+    # 3. Get Initial Experimental Data
+    X_initial, y_initial = get_initial_experiments(param_names, objective_name, dimensions)
+    # Corrected: If maximizing, negate y_initial values for the optimizer
+    if maximize_objective:
+        y_initial = [-val for val in y_initial]
+
+    # 4. Select Model and Acquisition Function
+    base_estimator, acq_func = select_model_and_acquisition()
+
+    # Initialize the Optimizer
+    print("\nInitializing Bayesian Optimizer...")
+    optimizer = Optimizer(
+        dimensions=dimensions,
+        base_estimator=base_estimator,
+        acq_func=acq_func,
+        n_initial_points=max(1, len(X_initial)) # Ensures at least 1 random initial point if no data provided
+    )
+
+    # Tell the optimizer about initial data
+    if X_initial:
+        optimizer.tell(X_initial, y_initial)
+        print(f"Loaded {len(X_initial)} initial experiments into the optimizer.")
+    else:
+        print("No initial experiments provided. The optimizer will use random points for initial exploration.")
+
+    # Main Optimization Loop
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            print(f"\n--- Optimization Iteration {iteration} ---")
+
+            # Display current best result
+            if not optimizer.yi:
+                print("No results to display yet. Performing initial exploration...")
+            else:
+                best_index = np.argmin(optimizer.yi)
+                current_best_y_internal = optimizer.yi[best_index]
+                current_best_x = optimizer.Xi[best_index]
+
+                # Revert negation for display if the objective was maximization
+                if maximize_objective:
+                    current_best_y_display = -current_best_y_internal
+                else:
+                    current_best_y_display = current_best_y_internal
+
+                print(f"\nCurrent best {objective_name} found so far: {current_best_y_display:.4f}")
+                print("Corresponding parameters:")
+                for name, value in zip(param_names, current_best_x):
+                    if isinstance(value, float):
+                        print(f"  {name}: {value:.4f}")
+                    else:
+                        print(f"  {name}: {value}")
+
+            # Ask for next suggestion and exit only once per loop
+            confirm_continue = get_valid_input(
+                "\nReady to get the next suggestion? (yes/no): ",
+                str,
+                lambda x: x.lower() in ['yes', 'no'],
+                "Please enter 'yes' or 'no'."
+            ).lower()
+
+            if confirm_continue == 'no':
+                print("\nOptimization session ended. Goodbye!")
+                break
+
+            # Suggest next parameters
+            suggested_x = optimizer.ask()
+
+            # Predict expected value and uncertainty at the suggested point
+            if len(optimizer.models) > 0:
+                X_transformed_for_predict = optimizer.space.transform([suggested_x])
+                if isinstance(base_estimator, GaussianProcessRegressor) and hasattr(optimizer.models[-1], 'predict') and 'return_std' in optimizer.models[-1].predict.__code__.co_varnames:
+                    mean_prediction, std_prediction = optimizer.models[-1].predict(X_transformed_for_predict, return_std=True)
+                    expected_objective_internal = mean_prediction[0]
+                    uncertainty = std_prediction[0]
+                elif isinstance(base_estimator, (RandomForestRegressor, ExtraTreesRegressor)):
+                    # Estimate uncertainty as std of predictions from all trees
+                    all_preds = np.array([tree.predict(X_transformed_for_predict) for tree in optimizer.models[-1].estimators_])
+                    mean_prediction = np.mean(all_preds)
+                    std_prediction = np.std(all_preds)
+                    expected_objective_internal = mean_prediction
+                    uncertainty = std_prediction
+                else:
+                    mean_prediction = optimizer.models[-1].predict(X_transformed_for_predict)
+                    expected_objective_internal = mean_prediction[0]
+                    uncertainty = "Varies (model does not provide direct standard deviation)"
+            else:
+                expected_objective_internal = "N/A (model not yet trained or insufficient data)"
+                uncertainty = "N/A (model not yet trained or insufficient data)"
+
+            # Revert negation for display if maximizing
+            if maximize_objective and isinstance(expected_objective_internal, (float, int)):
+                expected_objective_display = -expected_objective_internal
+            elif not maximize_objective and isinstance(expected_objective_internal, (float, int)):
+                expected_objective_display = expected_objective_internal
+            else:
+                expected_objective_display = expected_objective_internal
+
+            print("\nSuggested next experiment parameters:")
+            for name, value in zip(param_names, suggested_x):
+                if isinstance(value, float):
+                    print(f"  {name}: {value:.4f}")
+                else:
+                    print(f"  {name}: {value}")
+
+            if isinstance(expected_objective_display, (float, int)):
+                print(f"Expected {objective_name}: {expected_objective_display:.4f}")
+            else:
+                print(f"Expected {objective_name}: {expected_objective_display}")
+            print(f"Uncertainty: {uncertainty}")
+
+            # Get actual result from user
+            actual_result = get_valid_input(
+                f"\nAfter performing the experiment with these parameters, what was the actual {objective_name} obtained? : ",
+                float
+            )
+            # Corrected: If maximizing, negate for the optimizer
+            if maximize_objective:
+                actual_result = -actual_result
+
+            optimizer.tell(suggested_x, actual_result)
+            print("Model updated with your new experimental result.")
+
+            # Ask if the user wants to continue (streamlined, only once per loop)
+            print("\nNote on search space: The optimizer is searching within the global parameter ranges you defined at the beginning.")
+            print("If you wish to significantly narrow or change these ranges for future suggestions, you will need to restart the program and redefine the parameters with new bounds.")
+
+    except KeyboardInterrupt:
+        print("\nOptimization session interrupted by user. Goodbye!")
+
+if __name__ == "__main__":
+    main()
