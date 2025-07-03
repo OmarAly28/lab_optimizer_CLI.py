@@ -74,8 +74,8 @@ def define_objective():
 
     return objective_name, optimization_type == 'max'
 
-def get_initial_experiments(param_names, objective_name):
-    """Collects initial experimental data from the user."""
+def get_initial_experiments(param_names, objective_name, dimensions):
+    """Collects initial experimental data from the user, with bounds checking."""
     print("\n--- Enter Your Initial Experimental Data ---")
     num_experiments = get_valid_input(
         "How many experiments have you already performed? ",
@@ -96,7 +96,14 @@ def get_initial_experiments(param_names, objective_name):
         print(f"\nExperiment {i + 1}:")
         current_x = []
         for j, param_name in enumerate(param_names):
-            value = get_valid_input(f"   Enter value for '{param_name}': ", float)
+            low = dimensions[j].low
+            high = dimensions[j].high
+            value = get_valid_input(
+                f"   Enter value for '{param_name}' (between {low} and {high}): ",
+                float,
+                lambda v: low <= v <= high,
+                f"Value must be between {low} and {high}."
+            )
             current_x.append(value)
 
         X_initial.append(current_x)
@@ -165,7 +172,7 @@ def main():
     else:
         print(f"Note: Since you want to minimize '{objective_name}', values will be used directly.")
 
-    X_initial, y_initial = get_initial_experiments(param_names, objective_name)
+    X_initial, y_initial = get_initial_experiments(param_names, objective_name, dimensions)
     
     if maximize_objective:
         y_initial = [-val for val in y_initial]
